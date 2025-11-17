@@ -1,12 +1,13 @@
 <?php
 /*
-Bot created by @wizardloop
-Fully ready for distribution
+    webhook-bot-album
+    Created by @wizardloop
 */
+
 ob_start();
 
-define('API_KEY', 'YOUR_BOT_TOKEN'); // Your bot token here
-$adminx = "123456789"; // Chat ID of the admin to receive the messages
+define('API_KEY', 'YOUR_BOT_TOKEN_HERE');
+$adminx = "CHAT_ID";
 
 function bot($method, $datas = []) {
     $url = "https://api.telegram.org/bot".API_KEY."/".$method;
@@ -15,174 +16,161 @@ function bot($method, $datas = []) {
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $datas);
     $res = curl_exec($ch);
-    if(curl_error($ch)){
-        var_dump(curl_error($ch));
-    } else {
-        return json_decode($res);
-    }
+    return json_decode($res);
 }
 
-// Get update from Telegram
-$update = json_decode(file_get_contents('php://input'));
+$update = json_decode(file_get_contents('php://input'), true);
 
-// Determine message or callback_query
-$message = $update->message ?? $update->callback_query->message ?? null;
-$callback_query = $update->callback_query ?? null;
+$message  = $update['message'] ?? null;
+$callback = $update['callback_query'] ?? null;
 
-if(!$message) exit;
+if (!$message && !$callback) exit;
 
-$chat_id = $message->chat->id;
-$message_id = $message->message_id;
-$from_id = $message->from->id;
-$first_name = $message->from->first_name;
-$username = $message->from->username ?? '';
-$text = $message->text ?? '';
-$caption = $message->caption ?? '';
-$media_group_id = $message->media_group_id ?? null;
+if ($message) {
+    $chat_id = $message['chat']['id'];
+    $message_id = $message['message_id'];
+    $from_id = $message['from']['id'];
+    $text = $message['text'] ?? '';
+    $caption = $message['caption'] ?? '';
+    $media_group_id = $message['media_group_id'] ?? null;
+}
 
-// Files to store user progress
-$userMediaFile = "media$from_id.json";
-$check_file = "var$from_id.txt";
-$msgeditfile = "msgfile$from_id.txt";
+if ($callback) {
+    $chat_id = $callback['message']['chat']['id'];
+    $from_id = $callback['from']['id'];
+}
 
-// Command to start album collection
-if($text === "/album"){
-    file_put_contents($check_file, "check");
+if (!is_dir('data')) mkdir('data', 0777, true);
 
-    $msg_id = bot('sendMessage', [
+$userMediaFile = "data/media$from_id.json";
+$checkFile     = "data/var$from_id.txt";
+$editMsgFile   = "data/msgfile$from_id.txt";
+
+if ($message && $text === "/album") {
+    file_put_contents($checkFile, "check");
+    $msg_id = bot("sendMessage", [
         'chat_id' => $chat_id,
-        'text' => "*Now send the messages, you can send single messages and albums.*\nSupported message types: Text/Photo/Video/Animation/Document",
+        'text' => "*Send messages or albums now*\nSupported: Text, Photo, Video, Animation, Document",
         'parse_mode' => 'Markdown'
     ])->result->message_id;
-
-    file_put_contents($msgeditfile, $msg_id);
+    file_put_contents($editMsgFile, $msg_id);
+    exit;
 }
 
-// Load stored media
-$userMedia = file_exists($userMediaFile) ? json_decode(file_get_contents($userMediaFile), true) : [];
-$check = file_exists($check_file) ? trim(file_get_contents($check_file)) : null;
+$check = file_exists($checkFile) ? trim(file_get_contents($checkFile)) : null;
 
-// Collect media/text from user
-if($check === "check" && isset($message)) {
+if ($message && $check === "check") {
+
+    $is_album = ($media_group_id !== null);
+
+    $userMedia = file_exists($userMediaFile)
+        ? json_decode(file_get_contents($userMediaFile), true)
+        : [];
+
     $currentMedia = [];
+    $msgText = $text ?: $caption;
 
-    // Check text length if it's a caption or text
-    $msgText = $message->text ?? $message->caption ?? '';
-    if(mb_strlen($msgText) > 1024){
-        bot('deleteMessage', ['chat_id'=>$chat_id,'message_id'=>$message_id]);
-        $msgtodel = bot('sendMessage', [
+    if ($msgText && mb_strlen($msgText) > 1024) {
+        bot('deleteMessage', ['chat_id'=>$chat_id, 'message_id'=>$message_id]);
+        $warn = bot('sendMessage', [
             'chat_id'=>$chat_id,
-            'text'=>"✖️ *Do not send text with more than 1024 characters.*\nCharacters sent: ".mb_strlen($msgText),
+            'text'=>"✖️ Message too long: " . mb_strlen($msgText),
             'parse_mode'=>'Markdown'
         ])->result->message_id;
         sleep(3);
-        bot('deleteMessage',['chat_id'=>$chat_id,'message_id'=>$msgtodel]);
+        bot('deleteMessage', ['chat_id'=>$chat_id, 'message_id'=>$warn]);
         exit;
     }
 
-    // Collect media
-    if(isset($message->photo) && is_array($message->photo)){
-        $currentMedia[] = [
-            'type'=>'photo',
-            'file_id'=>end($message->photo)->file_id,
-            'caption'=>$caption
-        ];
-    }
-    if(isset($message->video)){
-        $currentMedia[] = ['type'=>'video','file_id'=>$message->video->file_id,'caption'=>$caption];
-    }
-    if(isset($message->animation)){
-        $currentMedia[] = ['type'=>'animation','file_id'=>$message->animation->file_id,'caption'=>$caption];
-    }
-    if(isset($message->video_note)){
-        $currentMedia[] = ['type'=>'video_note','file_id'=>$message->video_note->file_id,'caption'=>$caption];
-    }
-    if(isset($message->document)){
-        $currentMedia[] = ['type'=>'document','file_id'=>$message->document->file_id,'caption'=>$caption];
-    }
-    if(isset($message->text) && !preg_match('/^\/([Aa]lbum)/', $message->text)){
-        $currentMedia[] = ['type'=>'text','text'=>$message->text];
-    }
+    if (isset($message['photo']))
+        $currentMedia[] = ['type'=>'photo', 'file_id'=>end($message['photo'])['file_id'], 'caption'=>$caption];
+    if (isset($message['video']))
+        $currentMedia[] = ['type'=>'video', 'file_id'=>$message['video']['file_id'], 'caption'=>$caption];
+    if (isset($message['animation']))
+        $currentMedia[] = ['type'=>'animation', 'file_id'=>$message['animation']['file_id'], 'caption'=>$caption];
+    if (isset($message['document']))
+        $currentMedia[] = ['type'=>'document', 'file_id'=>$message['document']['file_id'], 'caption'=>$caption];
+    if (isset($message['video_note']))
+        $currentMedia[] = ['type'=>'video_note', 'file_id'=>$message['video_note']['file_id'], 'caption'=>$caption];
 
-    // Merge with previous media
+    if ($text && !preg_match('/^\/album/i', $text))
+        $currentMedia[] = ['type'=>'text', 'text'=>$text];
+
     $userMedia = array_merge($userMedia, $currentMedia);
     file_put_contents($userMediaFile, json_encode($userMedia));
 
+    $editMsgId = trim(file_get_contents($editMsgFile));
     $count = count($userMedia);
-    $msgidfile = file_exists($msgeditfile) ? trim(file_get_contents($msgeditfile)) : null;
 
-    // Edit message to show progress
     bot('editMessageText', [
-        'chat_id'=>$chat_id,
-        'message_id'=>$msgidfile,
-        'text'=>"📨 $count message(s) have been sent to the system. When finished, click ✅ Done to send.",
-        'parse_mode'=>'HTML',
-        'reply_markup'=>json_encode([
-            'inline_keyboard'=>[
-                [['text'=>"✅ Done ✅",'callback_data'=>"send_now"]]
+        'chat_id' => $chat_id,
+        'message_id' => $editMsgId,
+        'text' => "📨 *$count* message(s) collected.\nPress **Done** when ready.",
+        'parse_mode' => 'Markdown',
+        'reply_markup' => json_encode([
+            'inline_keyboard' => [
+                [['text'=>"✅ Done", 'callback_data'=>"send_now"]]
             ]
         ])
     ]);
 
-    // Delete the user's message
-    bot('deleteMessage',['chat_id'=>$chat_id,'message_id'=>$message_id]);
+        bot('deleteMessage', ['chat_id'=>$chat_id, 'message_id'=>$message_id]);
+
+    exit;
 }
 
-// Sending messages to admin
-if($callback_query && $callback_query->data === "send_now") {
-    if(file_exists($userMediaFile)){
-        $userMedia = json_decode(file_get_contents($userMediaFile), true);
+if ($callback && $callback['data'] === "send_now") {
 
-        $media_group = [];
-        $text_messages = [];
+    bot('answerCallbackQuery', ['callback_query_id'=>$callback['id']]);
 
-        foreach($userMedia as $m){
-            if($m['type']==='text'){
-                $text_messages[] = $m['text'];
-            } else {
-                $media_group[] = [
-                    'type'=>$m['type'],
-                    'media'=>$m['file_id'],
-                    'caption'=>$m['caption'] ?? ''
-                ];
-            }
-        }
+    $userMedia = file_exists($userMediaFile)
+        ? json_decode(file_get_contents($userMediaFile), true)
+        : [];
 
-        // Send media in chunks of 10 (Telegram limit)
-        $chunks = array_chunk($media_group, 10);
-        foreach($chunks as $chunk){
-            if(!empty($chunk)){
-                bot('sendMediaGroup',[
-                    'chat_id'=>$adminx,
-                    'media'=>json_encode($chunk),
-                    'disable_notification'=>true
-                ]);
-            }
-        }
+    $media_batch = [];
+    $text_list = [];
 
-        // Send text messages separately
-        foreach($text_messages as $text){
-            bot('sendMessage',[
-                'chat_id'=>$adminx,
-                'text'=>$text,
-                'parse_mode'=>'HTML',
-                'disable_notification'=>true
-            ]);
-        }
-
-        unlink($userMediaFile);
+    foreach ($userMedia as $m) {
+        if ($m['type'] === 'text')
+            $text_list[] = $m['text'];
+        else
+            $media_batch[] = [
+                'type' => $m['type'],
+                'media' => $m['file_id'],
+                'caption' => $m['caption'] ?? ''
+            ];
     }
 
-    if(file_exists($check_file)) unlink($check_file);
-    if(file_exists($msgeditfile)){
-        $msgidfile = trim(file_get_contents($msgeditfile));
-        bot('deleteMessage',['chat_id'=>$chat_id,'message_id'=>$msgidfile]);
-        unlink($msgeditfile);
+    foreach (array_chunk($media_batch, 10) as $chunk) {
+        bot('sendMediaGroup', [
+            'chat_id' => $adminx,
+            'media' => json_encode($chunk),
+            'disable_notification' => true
+        ]);
     }
 
-    bot('sendMessage',[
+    foreach ($text_list as $t) {
+        bot('sendMessage', [
+            'chat_id' => $adminx,
+            'text' => $t,
+            'parse_mode' => 'HTML'
+        ]);
+    }
+
+    if (file_exists($userMediaFile)) unlink($userMediaFile);
+    if (file_exists($checkFile)) unlink($checkFile);
+
+    if (file_exists($editMsgFile)) {
+        $editMsgId = trim(file_get_contents($editMsgFile));
+        bot('deleteMessage', ['chat_id'=>$chat_id, 'message_id'=>$editMsgId]);
+        unlink($editMsgFile);
+    }
+
+    bot('sendMessage', [
         'chat_id'=>$chat_id,
         'text'=>"<b>Messages sent successfully ☑️</b>",
         'parse_mode'=>'HTML'
     ]);
+
+    exit;
 }
