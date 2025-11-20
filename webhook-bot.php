@@ -1,8 +1,8 @@
 <?php
 /*
-    Telegram Album Bot # webhook-bot-album
+    Telegram Album Bot
     Created by @wizardloop
-    Clean & maintainable version
+    webhook version
 */
 
 ob_start();
