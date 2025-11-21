@@ -31,7 +31,7 @@ class AlbumBot extends SimpleEventHandler
 
 private array $albumTimers = [];
 
-private function processAlbumPart($message)
+private function processAlbumPart(object $message)
 {
     $senderId  = $message->senderId;
     $groupedId = $message->groupedId;
@@ -51,76 +51,39 @@ private function processAlbumPart($message)
     $media = $message->media ?? null;
     if (!$media) return;
 
-    $savedMedia = null;
+    $botApiFileId = $media->botApiFileId ?? null;
 
-    if (isset($media->location) && is_array($media->location) && ($media->location['_'] ?? '') === 'inputPhotoFileLocation') {
-        $loc = $media->location;
-
-        $savedMedia = [
-            'type'          => 'photo',
-            'id'            => $loc['id'],
-            'access_hash'   => $loc['access_hash'],
-            'file_reference'=> base64_encode($loc['file_reference'] ?? ''),
-            'dc_id'         => $loc['dc_id'] ?? null,
-        ];
+    if ($media instanceof \danog\MadelineProto\EventHandler\Media\Photo) {
+        $fileType = 'photo';
+    } elseif ($media instanceof \danog\MadelineProto\EventHandler\Media\Document) {
+        $fileType = 'document';
+    } elseif ($media instanceof \danog\MadelineProto\EventHandler\Media\Video) {
+        $fileType = 'video';
+    } elseif ($media instanceof \danog\MadelineProto\EventHandler\Media\Animation) {
+        $fileType = 'animation';
+    } else {
+        $fileType = null;
     }
 
-    elseif (isset($media->document) && is_object($media->document)) {
-        $d = $media->document;
-        $mime = $d->mime_type ?? '';
-        if (str_starts_with($mime, 'video/')) {
-            $fileRef = $d->file_reference ?? null;
-            $dcId = $d->dc_id ?? ($d->thumb?->$dc_id ?? null);
-            $savedMedia = [
-                'type'          => 'video',
-                'id'            => $d->id,
-                'access_hash'   => $d->access_hash ?? null,
-                'file_reference'=> base64_encode($fileRef ?? ''),
-                'dc_id'         => $d->dc_id ?? null,
-                'mime_type'     => $d->mime_type ?? '',
-                'attributes'    => $d->attributes ?? []
-            ];
-        }
-    }
+    if (!$botApiFileId || !$fileType) return;
 
-    elseif (isset($media->location) && is_array($media->location) && ($media->location['_'] ?? '') === 'inputDocumentFileLocation') {
-        $loc = $media->location;
+    $savedMedia = [
+        'type'         => $fileType,
+        'botApiFileId' => $botApiFileId
+    ];
 
-        $savedMedia = [
-            'type'          => 'video',
-            'id'            => $loc['id'],
-            'access_hash'   => $loc['access_hash'],
-            'file_reference'=> base64_encode($loc['file_reference'] ?? ''),
-            'dc_id'         => $loc['dc_id'] ?? null,
-            'mime_type'     => $media->mimeType ?? '',
-            'attributes'    => $media->attributes ?? []
-        ];
-    }
+    $entitiesTL = $message->entities
+        ? array_map(fn($e) => $e->toMTProto(), $message->entities)
+        : [];
 
-    if (!$savedMedia) {
-				try {
-                $this->messages->sendMedia(
-                    peer: $senderId,
-                    media: $message->media,
-                    message: $message->message ?? "",
-                    entities: $message->entities ?? []
-                );
+    $album[] = [
+        'media'    => $savedMedia,
+        'caption'  => $message->message ?? "",
+        'entities' => $entitiesTL,
+        'index'    => count($album),
+        'msg_id'   => $message->id,
+    ];
 
-                $this->messages->deleteMessages(revoke: true, id: [$message->id]);
-				} catch (\Throwable $e) { }
-    }
-
-$entitiesTL = $message->entities
-    ? array_map(fn($e) => $e->toMTProto(), $message->entities)
-    : [];
-
-$album[] = [
-    'media'    => $savedMedia,
-    'caption'  => $message->message ?? "",
-    'entities' => $entitiesTL,
-    'index'    => count($album),
-	'msg_id' => $message->id,
-];
     \Amp\File\write($albumFile, json_encode($album, JSON_PRETTY_PRINT));
     \Amp\File\write($timerFile, (string) time());
 
@@ -146,35 +109,21 @@ $album[] = [
 
         $chunks = array_chunk($album, 10);
 
-        foreach ($chunks as $chunkIndex => $chunk) {
-
+        foreach ($chunks as $chunk) {
             $multiMedia = [];
 
             foreach ($chunk as $item) {
-
                 $m = $item['media'];
 
                 if ($m['type'] === 'photo') {
                     $mediaArray = [
-                        '_' => 'inputMediaPhoto',
-                        'id' => [
-                            '_' => 'inputPhoto',
-                            'id' => $m['id'],
-                            'access_hash' => $m['access_hash'],
-                            'file_reference' => base64_decode($m['file_reference'] ?? ''),
-                            'dc_id' => $m['dc_id'],
-                        ]
+                        '_'  => 'inputMediaPhoto',
+                        'id' => $m['botApiFileId'],
                     ];
                 } else {
                     $mediaArray = [
-                        '_' => 'inputMediaDocument',
-                        'id' => [
-                            '_' => 'inputDocument',
-                            'id' => $m['id'],
-                            'access_hash' => $m['access_hash'],
-                            'file_reference' => base64_decode($m['file_reference'] ?? ''),
-                            'dc_id' => $m['dc_id'],
-                        ]
+                        '_'  => 'inputMediaDocument',
+                        'id' => $m['botApiFileId'],
                     ];
                 }
 
@@ -186,14 +135,15 @@ $album[] = [
                 ];
             }
 
+            try {
+                $res = $this->messages->sendMultiMedia(peer: $senderId, multi_media: $multiMedia);
+
                 try {
-                    $res = $this->messages->sendMultiMedia(peer: $senderId, multi_media: $multiMedia);
-					try {
-					$msgIds = array_map(fn($x) => $x['msg_id'], $chunk);
+                    $msgIds = array_map(fn($x) => $x['msg_id'], $chunk);
                     $this->messages->deleteMessages(revoke: true, id: $msgIds);
-					} catch (\Throwable $e) { }
-                } catch (\Throwable $e) {
-                }
+                } catch (\Throwable $e) {}
+                
+            } catch (\Throwable $e) {}
         }
     });
 }
