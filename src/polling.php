@@ -14,7 +14,7 @@ class Albums extends \danog\MadelineProto\SimpleEventHandler
 private array $albums = [];
 private array $albumTimers = [];
 
-private function saveAlbum(\danog\MadelineProto\EventHandler\Message $message, int $toSend, ?$del = false): void
+private function saveAlbum(\danog\MadelineProto\EventHandler\Message $message, int $toSend, ?bool $del = false): void
 {
     $senderId  = $message->senderId;
     $groupedId = $message->groupedId;
